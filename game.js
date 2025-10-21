@@ -15,6 +15,32 @@
   const timeEl = document.getElementById('time');
   const restartBtn = document.getElementById('restart');
 
+  // Simple assets object — place your sprite files in the "assets/" folder
+  const assets = {
+    bowser: new Image(),
+    mario: new Image(),
+    fireball: new Image(),
+  };
+  assets.bowser.src = 'assets/bowser.png'; // your Bowser PNG (recommended size ~96x96)
+  assets.mario.src = 'assets/mario.png';   // optional Mario sprite (~56x88)
+  assets.fireball.src = 'assets/fireball.png'; // optional fireball sprite
+
+  // Utility to load all images and call callback when done (or when failed)
+  function loadAllImages(list, cb) {
+    const imgs = Object.values(list);
+    let left = imgs.length;
+    if (!left) return cb();
+    imgs.forEach(img => {
+      if (img.complete && img.naturalWidth) {
+        left--;
+        if (left === 0) cb();
+        return;
+      }
+      img.onload = () => { left--; if (left === 0) cb(); };
+      img.onerror = () => { console.warn('Failed to load image', img.src); left--; if (left === 0) cb(); };
+    });
+  }
+
   // Game state
   let keys = {};
   let lastTime = performance.now();
@@ -28,8 +54,9 @@
   // Entities
   function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
   class Entity {
-    constructor(x,y,w,h,color,label) {
+    constructor(x,y,w,h,color,label,spriteKey) {
       this.x=x;this.y=y;this.w=w;this.h=h;this.color=color;this.label=label;
+      this.spriteKey = spriteKey || null; // name in assets
       this.vx=0; this.vy=0; this.onGround=false;
     }
     rect() { return {x:this.x,y:this.y,w:this.w,h:this.h}; }
@@ -37,6 +64,16 @@
       return !(this.x+this.w < o.x || this.x > o.x+o.w || this.y+this.h < o.y || this.y > o.y+o.h);
     }
     draw() {
+      // If a sprite is assigned and loaded, draw it. Otherwise fallback to rectangle.
+      if (this.spriteKey && assets[this.spriteKey] && assets[this.spriteKey].complete && assets[this.spriteKey].naturalWidth) {
+        try {
+          ctx.drawImage(assets[this.spriteKey], this.x, this.y, this.w, this.h);
+          return;
+        } catch (e) {
+          // fall through to rect if drawImage fails
+          console.warn('drawImage failed for', this.spriteKey, e);
+        }
+      }
       ctx.fillStyle = this.color;
       ctx.fillRect(this.x, this.y, this.w, this.h);
       ctx.fillStyle = "#fff";
@@ -52,12 +89,12 @@
   const bowserJumpForce = marioJumpForce * 2; // Bowser jumps twice as high
 
   // Player = Bowser
-  const bowser = new Entity(100, HEIGHT-130, 96, 96, "#b23", "Bowser");
+  const bowser = new Entity(100, HEIGHT-130, 96, 96, "#b23", "Bowser", 'bowser');
   bowser.maxHealth = 100;
   bowser.health = bowser.maxHealth;
 
   // Enemy = Mario
-  const mario = new Entity(700, HEIGHT-130, 56, 88, "#2a9", "Mario");
+  const mario = new Entity(700, HEIGHT-130, 56, 88, "#2a9", "Mario", 'mario');
   mario.maxHealth = 60;
   mario.health = mario.maxHealth;
   mario.direction = -1; // -1 left, 1 right
@@ -113,8 +150,6 @@
 
     // animate Bowser during bowserWin: small leap and pose
     if (ending.type === 'bowserWin') {
-      // during the first 0.25s make a little hop, then settle into pose
-      // We'll keep Bowser above ground visually by setting a render offset in draw()
       if (ending.t >= ending.duration) {
         // ending finished
         ending = null;
@@ -254,14 +289,16 @@
   function updateHealthBars() {
     const bPct = clamp(bowser.health / bowser.maxHealth, 0, 1);
     const mPct = clamp(mario.health / mario.maxHealth, 0, 1);
-    bowserHealthEl.style.setProperty('--pct', bPct);
-    marioHealthEl.style.setProperty('--pct', mPct);
-    bowserHealthEl.style.background = "#333";
-    marioHealthEl.style.background = "#333";
-    bowserHealthEl.style.position = 'relative';
-    marioHealthEl.style.position = 'relative';
-    bowserHealthEl.innerHTML = `<div style="position:absolute;left:0;top:0;bottom:0;width:${Math.round(bPct*100)}%;background:linear-gradient(90deg,#ffb86b,#ff4a4a)"></div>`;
-    marioHealthEl.innerHTML = `<div style="position:absolute;left:0;top:0;bottom:0;width:${Math.round(mPct*100)}%;background:linear-gradient(90deg,#7fffd4,#2ad58f)"></div>`;
+    if (bowserHealthEl && marioHealthEl) {
+      bowserHealthEl.style.setProperty('--pct', bPct);
+      marioHealthEl.style.setProperty('--pct', mPct);
+      bowserHealthEl.style.background = "#333";
+      marioHealthEl.style.background = "#333";
+      bowserHealthEl.style.position = 'relative';
+      marioHealthEl.style.position = 'relative';
+      bowserHealthEl.innerHTML = `<div style="position:absolute;left:0;top:0;bottom:0;width:${Math.round(bPct*100)}%;background:linear-gradient(90deg,#ffb86b,#ff4a4a)"></div>`;
+      marioHealthEl.innerHTML = `<div style="position:absolute;left:0;top:0;bottom:0;width:${Math.round(mPct*100)}%;background:linear-gradient(90deg,#7fffd4,#2ad58f)"></div>`;
+    }
   }
 
   function draw() {
@@ -300,13 +337,17 @@
       ctx.save();
       ctx.translate(cx, cy);
       ctx.scale(scale, scale);
-      // draw Bowser centered
-      ctx.fillStyle = bowser.color;
-      ctx.fillRect(-bowser.w/2, -bowser.h/2, bowser.w, bowser.h);
-      ctx.fillStyle = '#fff';
-      ctx.font = '16px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('Bowser', 0, 6);
+      // draw Bowser centered (use sprite if available)
+      if (assets.bowser && assets.bowser.complete && assets.bowser.naturalWidth) {
+        ctx.drawImage(assets.bowser, -bowser.w/2, -bowser.h/2, bowser.w, bowser.h);
+      } else {
+        ctx.fillStyle = bowser.color;
+        ctx.fillRect(-bowser.w/2, -bowser.h/2, bowser.w, bowser.h);
+        ctx.fillStyle = '#fff';
+        ctx.font = '16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Bowser', 0, 6);
+      }
       ctx.restore();
 
       // draw confetti foreground (small)
@@ -329,20 +370,25 @@
     bowser.draw();
     mario.draw();
 
-    // Draw fireballs
+    // Draw fireballs (use sprite if available)
     for (const f of fireballs) {
-      ctx.beginPath();
-      ctx.fillStyle = '#ff8c1a';
-      ctx.arc(f.x, f.y, f.r, 0, Math.PI*2);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,0.12)';
-      ctx.stroke();
+      if (assets.fireball && assets.fireball.complete && assets.fireball.naturalWidth) {
+        const size = f.r*2;
+        ctx.drawImage(assets.fireball, f.x - f.r, f.y - f.r, size, size);
+      } else {
+        ctx.beginPath();
+        ctx.fillStyle = "#ff8c1a";
+        ctx.arc(f.x, f.y, f.r, 0, Math.PI*2);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(0,0,0,0.12)";
+        ctx.stroke();
+      }
     }
 
     // Draw simple health numbers
-    ctx.fillStyle = '#111';
-    ctx.font = '14px sans-serif';
-    ctx.textAlign = 'left';
+    ctx.fillStyle = "#111";
+    ctx.font = "14px sans-serif";
+    ctx.textAlign = "left";
     ctx.fillText(`Bowser HP: ${Math.max(0,Math.round(bowser.health))}`, 12, 20);
     ctx.fillText(`Mario HP: ${Math.max(0,Math.round(mario.health))}`, 12, 40);
   }
@@ -361,7 +407,7 @@
 
   // Input handlers (robust: record both e.key and e.code)
   window.addEventListener('keydown', (e) => {
-    if (e.code === 'Space') {
+    if (e.code === "Space") {
       keys.Space = true;
       e.preventDefault();
     }
@@ -369,7 +415,7 @@
     if (e.code) keys[e.code] = true;
   });
   window.addEventListener('keyup', (e) => {
-    if (e.code === 'Space') keys.Space = false;
+    if (e.code === "Space") keys.Space = false;
     if (e.key) keys[e.key] = false;
     if (e.code) keys[e.code] = false;
   });
@@ -396,6 +442,10 @@
   // Start loop
   requestAnimationFrame(loop);
 
-  // Auto-start for convenience
-  startGame(); // auto-start so you can play immediately
+  // Auto-start after attempting to load sprites
+  loadAllImages(assets, () => {
+    console.log('Assets load attempt finished; starting game.');
+    startGame();
+  });
+
 })();
