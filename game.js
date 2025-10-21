@@ -21,6 +21,10 @@
   let elapsed = 0;
   let running = false;
 
+  // Ending animation state
+  let ending = null; // { type: 'bowserWin', t:0, duration:3.5 }
+  const particles = [];
+
   // Entities
   function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
   class Entity {
@@ -71,8 +75,64 @@
   // Simple ground rectangle
   const groundY = HEIGHT - 40;
 
+  // Confetti particle helper
+  function spawnConfetti(x, y, n) {
+    for (let i=0;i<n;i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 120 + Math.random()*200;
+      particles.push({
+        x: x + (Math.random()*30-15),
+        y: y + (Math.random()*10-5),
+        vx: Math.cos(angle)*speed,
+        vy: -Math.abs(Math.sin(angle))* (80 + Math.random()*160) - 40,
+        life: 1.6 + Math.random()*1.2,
+        size: 4 + Math.random()*6,
+        color: ['#ff4d4d','#ffca3a','#8ac926','#1982c4','#6a4c93'][Math.floor(Math.random()*5)]
+      });
+    }
+  }
+
+  function updateParticles(dt) {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.life -= dt;
+      if (p.life <= 0) { particles.splice(i,1); continue; }
+      p.vy += gravity * 0.4 * dt; // light gravity
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      // small air drag
+      p.vx *= 0.995;
+      p.vy *= 0.995;
+    }
+  }
+
+  function updateEnding(dt) {
+    if (!ending) return;
+    ending.t += dt;
+    updateParticles(dt);
+
+    // animate Bowser during bowserWin: small leap and pose
+    if (ending.type === 'bowserWin') {
+      // during the first 0.25s make a little hop, then settle into pose
+      // We'll keep Bowser above ground visually by setting a render offset in draw()
+      if (ending.t >= ending.duration) {
+        // ending finished
+        ending = null;
+        // final message
+        showMessage('You won! Mario defeated.');
+      }
+    }
+  }
+
   function update(dt) {
-    if (!running) return;
+    // If neither running nor an ending animation, do nothing
+    if (!running && !ending) return;
+
+    if (ending) {
+      // Progress the ending animation but stop normal game mechanics
+      updateEnding(dt);
+      return;
+    }
 
     elapsed += dt;
 
@@ -174,10 +234,13 @@
       if (f.life <= 0 || f.x < -50 || f.x > WIDTH + 50) fireballs.splice(i,1);
     }
 
-    // Check win/lose
+    // Check win/lose: start Bowser ending animation when Mario dies
     if (mario.health <= 0) {
-      running = false;
-      showMessage("You won! Mario defeated.");
+      // start ending animation rather than immediately alerting
+      ending = { type: 'bowserWin', t: 0, duration: 3.5 };
+      running = false; // stop normal game updates
+      // spawn confetti around Bowser
+      spawnConfetti(bowser.x + bowser.w/2, bowser.y + bowser.h/2 - 20, 50);
     } else if (bowser.health <= 0) {
       running = false;
       showMessage("You lost. Bowser was defeated.");
@@ -213,24 +276,73 @@
     ctx.fillStyle = "rgba(0,0,0,0.06)";
     ctx.fillRect(640, groundY-200, 220, 200);
 
-    // Draw entities
+    // If ending active and it's Bowser's win, draw Mario faded and Bowser with victory pose
+    if (ending && ending.type === 'bowserWin') {
+      // draw Mario faded out
+      ctx.globalAlpha = 0.45;
+      mario.draw();
+      ctx.globalAlpha = 1;
+
+      // Draw confetti particles behind and in front
+      for (const p of particles) {
+        ctx.beginPath();
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x, p.y, p.size, p.size);
+      }
+
+      // Victory transform for Bowser: bobbing + scale
+      const p = Math.min(1, ending.t / ending.duration);
+      const bob = Math.sin(p * Math.PI * 2) * 8 * (1 - p*0.6);
+      const scale = 1 + 0.35 * Math.sin(ending.t * 8) * (1 - p*0.2);
+      const cx = bowser.x + bowser.w/2;
+      const cy = bowser.y + bowser.h/2 + bob - (p < 0.25 ? (1-p/0.25)*40 : 0); // little pop up at start
+
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.scale(scale, scale);
+      // draw Bowser centered
+      ctx.fillStyle = bowser.color;
+      ctx.fillRect(-bowser.w/2, -bowser.h/2, bowser.w, bowser.h);
+      ctx.fillStyle = '#fff';
+      ctx.font = '16px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Bowser', 0, 6);
+      ctx.restore();
+
+      // draw confetti foreground (small)
+      for (const p2 of particles) {
+        ctx.beginPath();
+        ctx.fillStyle = p2.color;
+        ctx.fillRect(p2.x, p2.y, p2.size, p2.size);
+      }
+
+      // Caption
+      ctx.fillStyle = '#ffcc00';
+      ctx.font = '28px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('BOWSER WINS!', WIDTH/2, 60);
+
+      return; // skip normal draw
+    }
+
+    // Draw entities normally
     bowser.draw();
     mario.draw();
 
     // Draw fireballs
     for (const f of fireballs) {
       ctx.beginPath();
-      ctx.fillStyle = "#ff8c1a";
+      ctx.fillStyle = '#ff8c1a';
       ctx.arc(f.x, f.y, f.r, 0, Math.PI*2);
       ctx.fill();
-      ctx.strokeStyle = "rgba(0,0,0,0.12)";
+      ctx.strokeStyle = 'rgba(0,0,0,0.12)';
       ctx.stroke();
     }
 
     // Draw simple health numbers
-    ctx.fillStyle = "#111";
-    ctx.font = "14px sans-serif";
-    ctx.textAlign = "left";
+    ctx.fillStyle = '#111';
+    ctx.font = '14px sans-serif';
+    ctx.textAlign = 'left';
     ctx.fillText(`Bowser HP: ${Math.max(0,Math.round(bowser.health))}`, 12, 20);
     ctx.fillText(`Mario HP: ${Math.max(0,Math.round(mario.health))}`, 12, 40);
   }
@@ -249,7 +361,7 @@
 
   // Input handlers (robust: record both e.key and e.code)
   window.addEventListener('keydown', (e) => {
-    if (e.code === "Space") {
+    if (e.code === 'Space') {
       keys.Space = true;
       e.preventDefault();
     }
@@ -257,7 +369,7 @@
     if (e.code) keys[e.code] = true;
   });
   window.addEventListener('keyup', (e) => {
-    if (e.code === "Space") keys.Space = false;
+    if (e.code === 'Space') keys.Space = false;
     if (e.key) keys[e.key] = false;
     if (e.code) keys[e.code] = false;
   });
@@ -269,10 +381,13 @@
     bowser.x = 120; bowser.y = groundY - bowser.h; bowser.vx = bowser.vy = 0; bowser.health = bowser.maxHealth;
     mario.x = 700; mario.y = groundY - mario.h; mario.vx = mario.vy = 0; mario.health = mario.maxHealth; mario.direction = -1; mario.aiTimer = 0.6;
     fireballs.length = 0;
+    particles.length = 0;
+    ending = null;
     elapsed = 0;
     running = true;
     lastTime = performance.now();
     updateHealthBars();
+    console.log('Game started');
   }
 
   // Tweak UI health bar initial
@@ -282,5 +397,5 @@
   requestAnimationFrame(loop);
 
   // Auto-start for convenience
-  // startGame(); // uncomment to auto-start on load
+  startGame(); // auto-start so you can play immediately
 })();
